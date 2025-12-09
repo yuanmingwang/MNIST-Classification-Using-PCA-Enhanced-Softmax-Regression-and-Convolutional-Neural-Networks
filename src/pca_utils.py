@@ -19,8 +19,8 @@ This module uses scikit-learn (PCA + LogisticRegression).
 from __future__ import annotations
 
 import numpy as np
-import pandas as pd
 import joblib
+import time
 
 from sklearn.decomposition import PCA
 from sklearn.linear_model import LogisticRegression
@@ -28,16 +28,17 @@ from sklearn.metrics import accuracy_score
 from sklearn.model_selection import train_test_split
 
 from config import (
-    TRAIN_CSV_PATH,
-    PCA_MODEL_PATH,
+    get_dataset_config,
+    DEFAULT_DATASET,
     RANDOM_SEED,
     VALIDATION_FRACTION,
     PCA_N_COMPONENTS,
 )
+from data_utils import load_raw_train_arrays
 
 
-def train_pca_baseline() -> None:
-    """Train a PCA + Logistic Regression baseline on ``train.csv``.
+def train_pca_baseline(dataset: str = DEFAULT_DATASET) -> None:
+    """Train a PCA + Logistic Regression baseline on the chosen dataset.
 
     High-level steps
     ----------------
@@ -52,11 +53,13 @@ def train_pca_baseline() -> None:
 
     The saved model can then be used for predictions on test.csv.
     """
-    # 1. Load the data
-    df = pd.read_csv(TRAIN_CSV_PATH)
+    start_time = time.perf_counter()  # overall timer for PCA baseline
+    dataset_config = get_dataset_config(dataset)
 
-    y = df["label"].values
-    X = df.drop(columns=["label"]).values.astype(np.float32)
+    # 1. Load the data with dataset-aware parsing (handles Kaggle headers
+    #    vs. headerless MNIST CSVs). This keeps PCA training aligned with
+    #    the CNN pipeline's preprocessing.
+    X, y = load_raw_train_arrays(dataset_config.name)
 
     # 2. Train/validation split
     X_train, X_val, y_train, y_val = train_test_split(
@@ -91,8 +94,14 @@ def train_pca_baseline() -> None:
     # 6. Evaluate on validation set
     y_val_pred = clf.predict(X_val_pca)
     val_acc = accuracy_score(y_val, y_val_pred)
-    print(f"[PCA+LR] Validation accuracy: {val_acc:.4f}")
+    print(f"[PCA+LR][{dataset_config.name}] Validation accuracy: {val_acc:.4f}")
 
     # 7. Save both PCA object and classifier as a tuple
-    joblib.dump((pca, clf), PCA_MODEL_PATH)
-    print(f"[PCA+LR] Saved PCA+LR model to: {PCA_MODEL_PATH}")
+    joblib.dump((pca, clf), dataset_config.pca_model_path)
+    print(
+        f"[PCA+LR][{dataset_config.name}] Saved PCA+LR model to: "
+        f"{dataset_config.pca_model_path}"
+    )
+
+    total_time = time.perf_counter() - start_time
+    print(f"[PCA+LR][{dataset_config.name}] Training time: {total_time:.2f} sec")

@@ -17,13 +17,17 @@ Usage
 -----
 From the project root:
 
-    python src/train_cnn.py
+    python src/train_cnn.py --dataset kaggle
+    python src/train_cnn.py --dataset mnist
 
-This will read ``data/train.csv``, train the network, and save the best
-weights to ``models/cnn_model.pt``.
+This will read the chosen dataset's train CSV, train the network, and
+save the best weights to a dataset-specific checkpoint inside ``models/``.
 """
 
 from __future__ import annotations
+
+import argparse
+import time
 
 import torch
 import torch.nn as nn
@@ -33,20 +37,33 @@ from config import (
     NUM_EPOCHS,
     LEARNING_RATE,
     WEIGHT_DECAY,
-    CNN_MODEL_PATH,
+    get_dataset_config,
+    AVAILABLE_DATASETS,
+    DEFAULT_DATASET,
 )
 from data_utils import load_train_val_dataloaders
 from models import SimpleCNN
 
 
-def train_cnn() -> None:
-    """Main training routine for the CNN model."""
+def train_cnn(dataset: str = DEFAULT_DATASET) -> None:
+    """Main training routine for the CNN model.
+
+    Parameters
+    ----------
+    dataset:
+        Which dataset split to use (``kaggle`` or ``mnist``). Each choice
+        points the loaders at different CSVs and saves model checkpoints
+        to a dataset-specific filename so runs never overwrite each other.
+    """
+    # Resolve dataset-specific paths (train/test CSV + model checkpoint)
+    dataset_config = get_dataset_config(dataset)
+
     # Use GPU if available; otherwise, fall back to CPU
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    print(f"Using device: {device}")
+    print(f"Using device: {device} | dataset: {dataset_config.name}")
 
     # Data loaders for training and validation splits
-    train_loader, val_loader = load_train_val_dataloaders()
+    train_loader, val_loader = load_train_val_dataloaders(dataset_config.name)
 
     # Instantiate the CNN and move it to the chosen device
     model = SimpleCNN().to(device)
@@ -62,8 +79,12 @@ def train_cnn() -> None:
     )
 
     best_val_accuracy = 0.0
+    epoch_durations: list[float] = []
+    train_start = time.perf_counter()  # overall wall-clock timer
 
     for epoch in range(1, NUM_EPOCHS + 1):
+        epoch_start = time.perf_counter()  # per-epoch timer
+
         # ---------------------------
         # Training phase
         # ---------------------------
@@ -124,19 +145,52 @@ def train_cnn() -> None:
 
         val_accuracy = correct_val / total_val
 
+        # Track per-epoch duration for reporting
+        epoch_duration = time.perf_counter() - epoch_start
+        epoch_durations.append(epoch_duration)
+        # print(f"  Epoch time: {epoch_duration:.2f} sec")
+
         print(
             f"Epoch [{epoch}/{NUM_EPOCHS}] "
             f"Train Loss: {avg_train_loss:.4f} "
             f"Train Acc: {train_accuracy:.4f} "
-            f"Val Acc: {val_accuracy:.4f}"
+            f"Val Acc: {val_accuracy:.4f} "
+            f"Epoch time: {epoch_duration:.2f} sec"
         )
 
         # Save the model if validation accuracy improved
         if val_accuracy > best_val_accuracy:
             best_val_accuracy = val_accuracy
-            torch.save(model.state_dict(), CNN_MODEL_PATH)
-            print(f"  -> New best model saved with Val Acc = {best_val_accuracy:.4f}")
+            torch.save(model.state_dict(), dataset_config.cnn_model_path)
+            print(
+                f"  -> New best model saved ({dataset_config.cnn_model_path}) "
+                f"with Val Acc = {best_val_accuracy:.4f}"
+            )
+
+    # ---------------------------
+    # Timing summary
+    # ---------------------------
+    total_time = time.perf_counter() - train_start
+    avg_epoch_time = sum(epoch_durations) / len(epoch_durations)
+    print(
+        f"Training complete | Total: {total_time:.2f} sec | "
+        f"Avg/epoch: {avg_epoch_time:.2f} sec"
+    )
 
 
 if __name__ == "__main__":
-    train_cnn()
+    parser = argparse.ArgumentParser(
+        description="Train the CNN on Kaggle or MNIST CSV data."
+    )
+    parser.add_argument(
+        "--dataset",
+        choices=AVAILABLE_DATASETS,
+        default=DEFAULT_DATASET,
+        help=(
+            "Choose which dataset to train on. "
+            "Each dataset uses its own CSV files and saves to its own model checkpoint."
+        ),
+    )
+    args = parser.parse_args()
+
+    train_cnn(dataset=args.dataset)
