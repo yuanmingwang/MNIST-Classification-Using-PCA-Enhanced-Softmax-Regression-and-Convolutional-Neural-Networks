@@ -120,7 +120,7 @@ BATCH_SIZE = 64
 NUM_WORKERS = 4
 
 # CNN training hyperparameters
-NUM_EPOCHS = 2
+NUM_EPOCHS = 20
 LEARNING_RATE = 1e-3
 WEIGHT_DECAY = 1e-4  # L2 regularization term (weight decay in Adam)
 

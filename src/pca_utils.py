@@ -85,7 +85,6 @@ def train_pca_baseline(dataset: str = DEFAULT_DATASET) -> None:
     # 5. Train a multinomial Logistic Regression classifier
     clf = LogisticRegression(
         max_iter=1000,        # allow more iterations for convergence
-        multi_class="multinomial",
         solver="lbfgs",      # good default for multinomial LR
         n_jobs=-1,            # use all CPU cores (if allowed)
     )
