@@ -44,6 +44,7 @@ class DatasetConfig:
     train_csv: str
     test_csv: str
     cnn_model_path: str
+    cnn_pca_model_path: str
     pca_model_path: str
 
 
@@ -54,6 +55,7 @@ DATASETS = {
         train_csv=os.path.join(KAGGLE_DATA_DIR, "train.csv"),
         test_csv=os.path.join(KAGGLE_DATA_DIR, "test.csv"),
         cnn_model_path=os.path.join(MODEL_DIR, "cnn_model_kaggle.pt"),
+        cnn_pca_model_path=os.path.join(MODEL_DIR, "cnn_pca_model_kaggle.pt"),
         pca_model_path=os.path.join(MODEL_DIR, "pca_model_kaggle.pkl"),
     ),
     "mnist": DatasetConfig(
@@ -61,6 +63,7 @@ DATASETS = {
         train_csv=os.path.join(MNIST_DATA_DIR, "mnist_train.csv"),
         test_csv=os.path.join(MNIST_DATA_DIR, "mnist_test.csv"),
         cnn_model_path=os.path.join(MODEL_DIR, "cnn_model_mnist.pt"),
+        cnn_pca_model_path=os.path.join(MODEL_DIR, "cnn_pca_model_mnist.pt"),
         pca_model_path=os.path.join(MODEL_DIR, "pca_model_mnist.pkl"),
     ),
 }
@@ -120,7 +123,7 @@ BATCH_SIZE = 64
 NUM_WORKERS = 4
 
 # CNN training hyperparameters
-NUM_EPOCHS = 20
+NUM_EPOCHS = 5
 LEARNING_RATE = 1e-3
 WEIGHT_DECAY = 1e-4  # L2 regularization term (weight decay in Adam)
 

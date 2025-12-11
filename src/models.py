@@ -98,3 +98,75 @@ class SimpleCNN(nn.Module):
         logits = self.fc2(x)
 
         return logits
+
+
+class PCACNN(nn.Module):
+    """1D CNN that operates directly on PCA component vectors.
+
+    Input shape: (N, 1, L) where L = number of PCA components. This keeps
+    the reduced dimensionality (e.g., 100 comps instead of 784 pixels)
+    and applies 1D convolutions over the component sequence.
+
+    Example spatial dimensions (L = 100):
+        Input: (N, 1, 100)
+
+        1) Conv1d(1 -> 16, k=3) + ReLU
+           -> (N, 16, 98)
+           MaxPool1d(2)
+           -> (N, 16, 49)
+
+        2) Conv1d(16 -> 32, k=3) + ReLU
+           -> (N, 32, 47)
+           MaxPool1d(2)
+           -> (N, 32, 23)   # floor division for pooling
+
+        Flatten: (N, 32*23)
+        FC -> 128 -> NUM_CLASSES logits.
+
+    The lengths above adjust automatically based on the provided
+    ``input_length`` so we can choose any PCA_N_COMPONENTS without
+    rewriting the network.
+    """
+
+    def __init__(self, input_length: int):
+        super().__init__()
+
+        # Convolutional stack mirrors SimpleCNN but uses 1D ops over components
+        # Widths are smaller than the 2D CNN to reflect the already-compressed input.
+        self.conv1 = nn.Conv1d(1, 16, kernel_size=3)
+        self.conv2 = nn.Conv1d(16, 32, kernel_size=3)
+
+        # Compute length after conv/pool stack to size the FC layer
+        length_after = self._compute_length(input_length)
+        if length_after < 1:
+            raise ValueError(
+                "PCA component sequence too short for two conv+pool blocks. "
+                "Increase PCA components to grow the 1D length."
+            )
+
+        self.fc1 = nn.Linear(32 * length_after, 128)
+        self.fc2 = nn.Linear(128, NUM_CLASSES)
+
+    @staticmethod
+    def _compute_length(length: int) -> int:
+        """Compute 1D length after two (conv3 + pool2) blocks."""
+        length = length - 2   # conv1
+        length = length // 2  # pool1
+        length = length - 2   # conv2
+        length = length // 2  # pool2
+        return length
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        x = self.conv1(x)
+        x = F.relu(x)
+        x = F.max_pool1d(x, kernel_size=2)
+
+        x = self.conv2(x)
+        x = F.relu(x)
+        x = F.max_pool1d(x, kernel_size=2)
+
+        x = torch.flatten(x, start_dim=1)
+        x = self.fc1(x)
+        x = F.relu(x)
+        logits = self.fc2(x)
+        return logits
