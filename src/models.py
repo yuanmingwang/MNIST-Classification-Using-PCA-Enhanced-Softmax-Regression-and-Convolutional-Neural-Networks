@@ -170,3 +170,72 @@ class PCACNN(nn.Module):
         x = F.relu(x)
         logits = self.fc2(x)
         return logits
+
+
+class PCACNN2D(nn.Module):
+    """2D CNN for PCA components packed into a square grid.
+
+    The PCA vector is written row-wise into a square of side ``input_side``
+    (padding with zeros if needed). This mirrors the standard 2D CNN
+    data flow while using narrower channels because the input is already
+    compressed.
+
+    Example spatial dimensions (input_side = 10):
+        Input: (N, 1, 10, 10)
+
+        1) Conv2d(1 -> 16, k=3) + ReLU
+           -> (N, 16, 8, 8)
+           MaxPool2d(2x2)
+           -> (N, 16, 4, 4)
+
+        2) Conv2d(16 -> 32, k=3) + ReLU
+           -> (N, 32, 2, 2)
+           MaxPool2d(2x2)
+           -> (N, 32, 1, 1)
+
+        Flatten: (N, 32*1*1)
+        FC -> 128 -> NUM_CLASSES logits.
+
+    Larger grids produce proportionally larger flattened features; the
+    FC layer size is computed dynamically from ``input_side``.
+    """
+
+    def __init__(self, input_side: int):
+        super().__init__()
+
+        self.conv1 = nn.Conv2d(1, 16, kernel_size=3)
+        self.conv2 = nn.Conv2d(16, 32, kernel_size=3)
+
+        size_after = self._compute_spatial_size(input_side)
+        if size_after < 1:
+            raise ValueError(
+                "PCA grid too small for two conv+pool blocks. "
+                "Increase PCA components or grid padding."
+            )
+
+        self.fc1 = nn.Linear(32 * size_after * size_after, 128)
+        self.fc2 = nn.Linear(128, NUM_CLASSES)
+
+    @staticmethod
+    def _compute_spatial_size(side: int) -> int:
+        """Compute spatial dimension after two (conv3x3 + pool2x2) blocks."""
+        side = side - 2           # conv1
+        side = side // 2          # pool1
+        side = side - 2           # conv2
+        side = side // 2          # pool2
+        return side
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        x = self.conv1(x)
+        x = F.relu(x)
+        x = F.max_pool2d(x, kernel_size=2)
+
+        x = self.conv2(x)
+        x = F.relu(x)
+        x = F.max_pool2d(x, kernel_size=2)
+
+        x = torch.flatten(x, start_dim=1)
+        x = self.fc1(x)
+        x = F.relu(x)
+        logits = self.fc2(x)
+        return logits

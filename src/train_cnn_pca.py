@@ -1,13 +1,13 @@
 """train_cnn_pca.py
 
-Train a CNN with PCA preprocessing.
+Train a CNN with PCA preprocessing (1D or 2D layout).
 
 Workflow:
     1) Fit PCA on the *training* split only (after normalizing pixels).
-    2) Transform train/val splits into low-dimensional PCA components
-       (no inverse transform; the CNN consumes the reduced features).
-    3) Pad/reshape the PCA vectors into a compact square so a small CNN
-       can operate on them.
+    2) Transform train/val splits into low-dimensional PCA components.
+    3) Feed either:
+       - a 1D CNN over the component sequence, or
+       - a 2D CNN over a zero-padded square grid of components.
 
 This keeps the CNN architecture unchanged while letting PCA act as a
 dimensionality-reduction + denoising step. Each dataset (Kaggle vs
@@ -41,7 +41,7 @@ from config import (
     get_dataset_config,
 )
 from data_utils import load_raw_train_arrays
-from models import PCACNN
+from models import PCACNN, PCACNN2D
 
 
 class PCAFeatureDataset(Dataset):
@@ -64,12 +64,34 @@ class PCAFeatureDataset(Dataset):
         )
 
 
+class PCAFeatureDataset2D(Dataset):
+    """Dataset for PCA component vectors packed into a square grid."""
+
+    def __init__(self, components: np.ndarray, labels: np.ndarray, grid_side: int):
+        # Pad components into a square grid (row-wise); zeros fill unused cells.
+        num_samples, num_features = components.shape
+        grid_size = grid_side * grid_side
+        padded = np.zeros((num_samples, grid_size), dtype=np.float32)
+        padded[:, :num_features] = components.astype(np.float32)
+        self.features = padded.reshape(num_samples, 1, grid_side, grid_side)
+        self.labels = labels.astype(np.int64)
+
+    def __len__(self) -> int:
+        return self.features.shape[0]
+
+    def __getitem__(self, idx: int):
+        return (
+            torch.from_numpy(self.features[idx]),
+            torch.tensor(self.labels[idx], dtype=torch.long),
+        )
+
+
 def build_component_loaders(
     X: np.ndarray,
     y: np.ndarray,
     n_components: int,
-) -> tuple[DataLoader, DataLoader]:
-    """Fit PCA on normalized train data and return DataLoaders of 1D components.
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    """Fit PCA on normalized train data and return splits + timer.
 
     Parameters
     ----------
@@ -106,10 +128,47 @@ def build_component_loaders(
         f"(variance retained not printed; tune via PCA_N_COMPONENTS)."
     )
 
-    # Use PCA component vectors directly (no inverse transform or padding).
-    # Components are zero-mean features; keep them 1D and feed Conv1d.
-    train_dataset = PCAFeatureDataset(X_train_pca, y_train)
-    val_dataset = PCAFeatureDataset(X_val_pca, y_val)
+    return X_train_pca, y_train, X_val_pca, y_val, pca_fit_time
+
+
+def train_cnn_with_pca(
+    dataset: str = DEFAULT_DATASET,
+    n_components: int = PCA_N_COMPONENTS,
+    layout: str = "1d",
+) -> None:
+    """Train the CNN using PCA-reconstructed images as input."""
+    dataset_config = get_dataset_config(dataset)
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    print(
+        f"Using device: {device} | dataset: {dataset_config.name} | "
+        f"PCA components: {n_components} | layout: {layout}"
+    )
+
+    # Load raw arrays with dataset-aware CSV parsing
+    X, y = load_raw_train_arrays(dataset_config.name)
+
+    # PCA fit/transform once up front
+    (
+        X_train_pca,
+        y_train,
+        X_val_pca,
+        y_val,
+        pca_fit_time,
+    ) = build_component_loaders(X, y, n_components)
+    print(f"[PCA] Fit + transform time: {pca_fit_time:.2f} sec")
+    print(f"[Data] Train samples: {len(y_train)} | Val samples: {len(y_val)}")
+
+    # Build loaders depending on layout choice
+    if layout == "1d":
+        train_dataset = PCAFeatureDataset(X_train_pca, y_train)
+        val_dataset = PCAFeatureDataset(X_val_pca, y_val)
+    elif layout == "2d":
+        grid_side = int(np.ceil(np.sqrt(n_components)))
+        train_dataset = PCAFeatureDataset2D(X_train_pca, y_train, grid_side)
+        val_dataset = PCAFeatureDataset2D(X_val_pca, y_val, grid_side)
+        print(f"[PCA] 2D grid side: {grid_side} (padded with zeros if needed)")
+    else:
+        raise ValueError("layout must be '1d' or '2d'")
 
     train_loader = DataLoader(
         train_dataset,
@@ -125,30 +184,15 @@ def build_component_loaders(
         num_workers=NUM_WORKERS,
     )
 
-    return train_loader, val_loader
-
-
-def train_cnn_with_pca(
-    dataset: str = DEFAULT_DATASET,
-    n_components: int = PCA_N_COMPONENTS,
-) -> None:
-    """Train the CNN using PCA-reconstructed images as input."""
-    dataset_config = get_dataset_config(dataset)
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    print(
-        f"Using device: {device} | dataset: {dataset_config.name} | "
-        f"PCA components: {n_components}"
-    )
-
-    # Load raw arrays with dataset-aware CSV parsing
-    X, y = load_raw_train_arrays(dataset_config.name)
-
-    # Build loaders with PCA component pipeline (keeps 1D reduced features)
-    train_loader, val_loader = build_component_loaders(X, y, n_components)
-
     # CNN sized to the PCA sequence length, not the original 28x28 image
     print(f"[PCA] Component length after reduction: {n_components}")
-    model = PCACNN(input_length=n_components).to(device)
+    if layout == "1d":
+        model = PCACNN(input_length=n_components).to(device)
+        checkpoint_path = dataset_config.cnn_pca_model_path.replace(".pt", "_1d.pt")
+    else:
+        grid_side = int(np.ceil(np.sqrt(n_components)))
+        model = PCACNN2D(input_side=grid_side).to(device)
+        checkpoint_path = dataset_config.cnn_pca_model_path.replace(".pt", "_2d.pt")
     criterion = nn.CrossEntropyLoss()
     optimizer = optim.Adam(
         model.parameters(),
@@ -217,9 +261,9 @@ def train_cnn_with_pca(
         if val_accuracy > best_val_accuracy:
             best_val_accuracy = val_accuracy
             # Save to a dedicated PCA+CNN checkpoint so plain CNN runs are untouched
-            torch.save(model.state_dict(), dataset_config.cnn_pca_model_path)
+            torch.save(model.state_dict(), checkpoint_path)
             print(
-                f"  -> New best model saved ({dataset_config.cnn_pca_model_path}) "
+                f"  -> New best model saved ({checkpoint_path}) "
                 f"with Val Acc = {best_val_accuracy:.4f}"
             )
 
@@ -237,7 +281,10 @@ def train_cnn_with_pca(
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
-        description="Train CNN with PCA preprocessing (Kaggle or MNIST CSV datasets)."
+        description=(
+            "Train CNN with PCA preprocessing (Kaggle or MNIST CSV datasets). "
+            "Supports 1D (Conv1d) or 2D (Conv2d) layouts over PCA features."
+        )
     )
     parser.add_argument(
         "--dataset",
@@ -251,9 +298,16 @@ if __name__ == "__main__":
         default=PCA_N_COMPONENTS,
         help="Number of PCA components to retain before inverse-transforming.",
     )
+    parser.add_argument(
+        "--layout",
+        choices=("1d", "2d"),
+        default="1d",
+        help="Choose Conv1d over PCA sequence or Conv2d over a padded square grid.",
+    )
     args = parser.parse_args()
 
     train_cnn_with_pca(
         dataset=args.dataset,
         n_components=args.pca_components,
+        layout=args.layout,
     )
