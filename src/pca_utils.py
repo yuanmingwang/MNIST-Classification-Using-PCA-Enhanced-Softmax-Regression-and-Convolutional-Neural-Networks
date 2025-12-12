@@ -60,6 +60,7 @@ def train_pca_baseline(dataset: str = DEFAULT_DATASET) -> None:
     #    vs. headerless MNIST CSVs). This keeps PCA training aligned with
     #    the CNN pipeline's preprocessing.
     X, y = load_raw_train_arrays(dataset_config.name)
+    print(f"[Data][PCA] Train samples: {len(y)}")
 
     # 2. Train/validation split
     X_train, X_val, y_train, y_val = train_test_split(
