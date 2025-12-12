@@ -64,6 +64,11 @@ def train_cnn(dataset: str = DEFAULT_DATASET) -> None:
 
     # Data loaders for training and validation splits
     train_loader, val_loader = load_train_val_dataloaders(dataset_config.name)
+    # Log dataset sizes up front so users know how many samples are seen
+    print(
+        f"[Data] Train samples: {len(train_loader.dataset)} | "
+        f"Val samples: {len(val_loader.dataset)}"
+    )
 
     # Instantiate the CNN and move it to the chosen device
     model = SimpleCNN().to(device)
